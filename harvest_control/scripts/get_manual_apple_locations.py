@@ -17,7 +17,7 @@ class ManualAppleLocations(Node):
         super().__init__("manual_apple_locations_node")
 
         # --- Declare & read new parameter for output dir ---
-        self.declare_parameter('output_directory', '/home/imml/demoData/')
+        self.declare_parameter('output_directory', '/home/imml/git/demoData/')
         self.output_directory = self.get_parameter('output_directory') \
                                     .get_parameter_value().string_value
 
@@ -71,7 +71,7 @@ class ManualAppleLocations(Node):
         # Create directory and save to CSV
         logging_directory = self.create_directory()
         csv_file = self.save_to_csv(logging_directory)
-        access_directory = "/home/grimmlins/ros2_ws/data/apple_locations"
+        access_directory = "/media/imml/LaCie/prosser25_day3"
         _ = self.save_to_csv(access_directory)
         self.get_logger().info(f'Saved apple locations to {csv_file}')
 

@@ -59,8 +59,10 @@ install(PROGRAMS
   scripts/pose_listener.py
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py
+  scripts/eva_controller_relative_motion.py
   scripts/visual_servo.py
   scripts/stiffness_controller.py
+  scripts/eva_publish_vacuum.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

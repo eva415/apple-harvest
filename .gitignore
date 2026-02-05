@@ -1,1 +1,5 @@
 __pycache__*
+build/
+log/
+install/
+harvest_vision/yolo_networks/v9e.pt

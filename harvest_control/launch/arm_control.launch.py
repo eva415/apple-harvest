@@ -2,7 +2,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression, TextSubstitution, IfElseSubstitution, EqualsSubstitution
 from launch_ros.actions import Node
@@ -93,95 +93,95 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ---------- Other nodes (commented out in your original) ----------
-    coord_to_traj = Node(
-        package='harvest_control',
-        executable='coordinate_to_trajectory.py',
-        name='trajectory_query_node',
-        parameters=[{
-            'sim': LaunchConfiguration('sim'),
-            'voxel_distance_tol': LaunchConfiguration('voxel_distance_tol'),
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }],
-        output='screen',
-    )
-    event_detector = Node(
-        package='harvest_control', 
-        executable='event_detector.py', 
-        name='event_detector', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    force_filter = Node(
-        package='harvest_control', 
-        executable='force_filter.py', 
-        name='forcefilter', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    pick_controller = Node(
-        package='harvest_control', 
-        executable='heuristic_controller.py', 
-        name='pick_controller', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    linear_controller = Node(
-        package='harvest_control', 
-        executable='linear_controller.py', 
-        name='linear_controller', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    tf_listener = Node(
-        package='harvest_control', 
-        executable='pose_listener.py', 
-        name='tf_listener', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    pressure_avg = Node(
-        package='harvest_control', 
-        executable='pressure_averager.py', 
-        name='pressure_averager', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    pull_twist = Node(
-        package='harvest_control', 
-        executable='pull_twist_controller.py', 
-        name='pull_twist_controller', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
-    recorder = Node(
-        package='harvest', 
-        executable='record.py', 
-        name='record_topics_node', 
-        parameters=[{
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-            }],
-    )
+        # # Launch my micro-ROS agent -- EVA
+        # ExecuteProcess(
+        #     cmd=[
+        #         'ros2', 'run', 'micro_ros_agent',
+        #         'micro_ros_agent',
+        #         'serial',
+        #         '--dev', '/dev/ttyUSB0'
+        #     ],
+        #     output='screen'
+        # ),
 
-    return LaunchDescription(
-        args + [
-            ur_driver,
-            moveit,
-            coord_to_traj,
-            event_detector,
-            force_filter,
-            pick_controller,
-            linear_controller,
-            tf_listener,
-            pressure_avg,
-            pull_twist,
-            recorder,
-        ]
-    )
+
+        # # Launch my vacuum publisher -- EVA
+        # Node(
+        #     package='harvest_control',
+        #     executable='eva_publish_vacuum.py',
+        #     name='vacuum_publisher',
+        # ),
+
+        # Launch the coordinate_to_trajectory_node
+        Node(
+            package='harvest_control',
+            executable='coordinate_to_trajectory.py',
+            name='trajectory_query_node',
+            parameters=[
+                    {"sim": LaunchConfiguration("sim"),
+                     "voxel_distance_tol": LaunchConfiguration("voxel_distance_tol")
+                      }
+                    ]
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='event_detector.py',
+            name='event_detector',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='force_filter.py',
+            name='forcefilter',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='heuristic_controller.py',
+            name='pick_controller',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='linear_controller.py',
+            name='linear_controller',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='pose_listener.py',
+            name='tf_listener',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='pressure_averager.py',
+            name='pressure_averager',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='pull_twist_controller.py',
+            name='pull_twist_controller',
+        ),
+        
+        # # Launch C++ node
+        # Node(
+        #     package='harvest_control',
+        #     executable='move_arm',
+        #     name='move_arm_node',
+        #     parameters=[
+        #             {"max_accel": LaunchConfiguration("max_accel"),
+        #              "max_vel": LaunchConfiguration("max_vel"),
+        #              "traj_time_step": LaunchConfiguration("traj_time_step"),
+        #               }
+        #             ]
+        # ),
+
+        Node(
+            package='harvest',
+            executable='record.py',
+            name='record_topics_node',
+        ),
+    ])

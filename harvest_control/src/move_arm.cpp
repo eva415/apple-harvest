@@ -48,12 +48,12 @@ private:
     std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     std::vector<double> home_joint_positions = {
         M_PI / 4,
+        -2.04204,
+        2.44049389,
+        2.75744569,
         -M_PI / 2,
-        2 * M_PI / 3,
-        5 * M_PI / 6,
-        -M_PI / 2,
-        0};
-
+        M_PI};
+        
     std::vector<double> scan_joint_positions = {
         M_PI / 2,
         -M_PI / 2,
@@ -202,8 +202,9 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
 
     // Set pose and joint tolerances
     this->move_group_->setPoseTarget(msg, "gripper_link");
+    this->move_group_->setGoalOrientationTolerance(0.175);
     // this->move_group_->setGoalOrientationTolerance(0.35);
-    this->move_group_->setGoalOrientationTolerance(1.05);
+    // this->move_group_->setGoalOrientationTolerance(1.05);
     // this->move_group_->setGoalJointTolerance(0.001); // Minimize joint changes
 
     // Use an optimization-aware planner

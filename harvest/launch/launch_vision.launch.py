@@ -96,9 +96,21 @@ def generate_launch_description():
                       }
                 ])
     
+    # adding my usb camera node for recording picks -- EVA
+    # usb_cam_node = launch_ros.actions.Node(
+    #             package='usb_cam',
+    #             executable='usb_cam_node_exe',
+    #             name='usb_cam_node',
+    #             output='screen',
+    #             parameters=[
+    #                 {'video_device': '/dev/video0'}
+    #             ]
+    #         )
+    
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node, 
                              vservo_node, 
-                             palm_camera_node,
+                            #  palm_camera_node,
+                            #  usb_cam_node,
                              realsense_topics_node
     ])
