@@ -3,4 +3,4 @@ build/
 log/
 install/
 harvest_vision/yolo_networks/v9e.pt
-harvest_control/resource/reachable_paths_20260204_173336.npyharvest_control/resource/reachable_paths_20260204_173336.npy
+harvest_control/resource/reachable_paths_20260204_173336.npy
