@@ -159,6 +159,18 @@ def generate_launch_description():
             name='pull_twist_controller',
         ),
         
+        Node(
+            package='harvest_control',
+            executable='eva_publish_vacuum.py',
+            name='publish_vacuum',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='eva_controller_relative_motion.py',
+            name='eva_controller_relative_motion',
+        ),
+        
         # # Launch C++ node
         # Node(
         #     package='harvest_control',

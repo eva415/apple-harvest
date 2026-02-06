@@ -50,7 +50,8 @@ class StartHarvest(Node):
         self.cb_group = MutuallyExclusiveCallbackGroup()
 
         # Get storage directory
-        self.storage_directory = get_data_storage_dir()
+        # self.storage_directory = get_data_storage_dir()
+        self.storage_directory = "/home/imml/Desktop/prosser_2025_day3"
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
 
@@ -59,16 +60,16 @@ class StartHarvest(Node):
         self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
-        self.declare_parameter('pick_pattern', 'force-heuristic')
+        self.declare_parameter('pick_pattern', 'eva_controller_relative_motion')
         self.declare_parameter('event_sensitivity', 0.43)
         self.declare_parameter('recording_startup_delay', 0.5)
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
-        self.declare_parameter('enable_visual_servo', True)
-        self.declare_parameter('enable_apple_prediction', True)
-        self.declare_parameter('enable_pressure_servo', True)    
-        self.declare_parameter('enable_picking', True)           
-        self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('enable_visual_servo', False)
+        self.declare_parameter('enable_apple_prediction', False)
+        self.declare_parameter('enable_pressure_servo', False)
+        self.declare_parameter('enable_picking', True)
+        self.declare_parameter('optimal_trajectory', False)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -90,7 +91,7 @@ class StartHarvest(Node):
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
         self.trigger_move_arm_to_pose_client =  self.make_client(MoveToPose, 'move_arm_to_pose')
-        # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
+        self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
 
         # Conditional clients
         if self.enable_recording:
@@ -100,22 +101,24 @@ class StartHarvest(Node):
             self.init_metadata_and_topics()
         if self.enable_visual_servo:
             self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
+        if self.PICK_PATTERN == 'eva_controller_relative_motion':
+            self.relative_motion_client = self.make_client(Trigger, '/eva_controller_relative_motion') # made a service client
         if self.enable_apple_prediction:
             self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
         if self.enable_pressure_servo:
             self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
             self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
-            self.start_controller_cli = self.make_client(Empty, 'start_controller')
-            self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
-            self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
-            self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
-            self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
-            self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
-            self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
-            self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
-            self.set_goal_cli = self.make_client(SetValue, 'set_goal')
-            self._event_client = ActionClient(self, EventDetection, 'event_detection')
+            # self.start_controller_cli = self.make_client(Empty, 'start_controller')
+            # self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
+            # self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
+            # self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
+            # self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
+            # self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
+            # self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
+            # self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
+            # self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+            # self._event_client = ActionClient(self, EventDetection, 'event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
 
 
@@ -130,7 +133,7 @@ class StartHarvest(Node):
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
         # Recording topics
-        self.prediction_topics = ['/apple_markers']
+        self.prediction_topics = ['/apple_markers', '/apple_annotated']
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
         self.pressure_servo_topics = [
@@ -141,6 +144,11 @@ class StartHarvest(Node):
         self.pick_controller_topics = [
             '/gripper/pressure','/gripper/distance','/joint_states',
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+        ]
+        # I use topics below as the ones being recorded during my relative_motion_controller actions
+        self.relative_motion_controller_topics = [
+            '/tof_sensor_data', '/flex_sensor_data', '/joint_states', '/tool_pose', '/gripper_tip', '/servo_node/delta_twist_cmds',
+            '/force_torque_sensor_broadcaster/wrench', '/vacuum_pressure', '/image_raw', '/camera/mast_camera/color/image_raw'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 
@@ -220,7 +228,7 @@ class StartHarvest(Node):
 
     def read_apple_locations(self, directory):
         csv_file = Path(directory) / 'apple_locations.csv'
-        data = np.loadtxt(str(csv_file), delimiter=',')
+        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=1) # I added skiprows to avoid issues with the header in the csv
         if data.ndim == 1:
             data = data[np.newaxis, :]
         return data  # shape is now (N, 3)
@@ -287,32 +295,95 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
     
-    def switch_controller(self, servo=False, sim=False):
-        # Switches controller from forward position controller to joint_trajectory controller
-        self.request = SwitchController.Request()
-        if servo:
-            if not sim:
-                self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
-            else:
-                self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
+    # made a function to call my service
+    def call_relative_motion_and_wait(self):
+        # 1. Send the service request COMMENTED OUT TO DEBUG
+        # success = self.call_relative_motion()  # your existing method
+        # if not success:
+        #     self.get_logger().warn("Relative motion service rejected.")
+        #     return False
+
+        # # 2. Wait for the motion to complete
+        # self.get_logger().info("Waiting for relative motion to complete...")
+        # You can poll the FlexToFListener node via a custom topic or service
+        # For example, suppose it publishes /relative_motion_status (string) with 'done', 'FAIL', 'running'
+        import time
+        from std_msgs.msg import String
+
+        status_msg = None
+        def status_cb(msg):
+            nonlocal status_msg
+            status_msg = msg.data
+
+        sub = self.create_subscription(String, '/relative_motion_status', status_cb, 10)
+
+        # Wait until status is 'done' or 'FAIL'
+        while status_msg not in ['done', 'FAIL', 'idle']:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+        self.get_logger().info(f"Relative motion finished with status: {status_msg}")
+        return status_msg == 'done'
+    
+    def call_relative_motion(self):
+        req = Trigger.Request()
+        self.get_logger().info('Calling /eva_controller_relative_motion service...')
+        future = self.relative_motion_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            self.get_logger().info(f"Service response: {future.result().message}")
+            return future.result().success
         else:
-            if not sim:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
-                self.request.deactivate_controllers = ["forward_position_controller"]
-            else:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
-                self.request.deactivate_controllers = ["forward_position_controller"]
-        self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+            self.get_logger().error('Failed to call /eva_controller_relative_motion service.')
+            return False
+    
+    def switch_controller(self, servo=False, sim=False):
+        """
+        Switches between controllers depending on mode and environment.
 
-        
-        # TODO: Commit this Alejo's change
-        self.request.strictness = SwitchController.Request.BEST_EFFORT  # Use STRICT or BEST_EFFORT
+        - servo=True  → activates forward_position_controller
+        - servo=False → activates trajectory controller
+        - sim=True    → uses scaled_joint_trajectory_controller (MoveIt simulation)
+        """
 
-        self.future = self.switch_controller_client.call_async(self.request)
-        rclpy.spin_until_future_complete(self, self.future)
-        return self.future.result()
+        self.get_logger().info(f"SWITCH CONTROLLER CALLED... (servo={servo}, sim={sim})")
+
+        req = SwitchController.Request()
+
+        # Simulation-aware controller logic
+        if sim:
+            trajectory_controller = "scaled_joint_trajectory_controller"
+        else:
+            trajectory_controller = "joint_trajectory_controller"
+
+        # Decide activation/deactivation order
+        if servo:
+            req.activate_controllers = ["forward_position_controller"]
+            req.deactivate_controllers = [trajectory_controller]
+            self.get_logger().info(
+                f"Activating forward_position_controller, deactivating {trajectory_controller}"
+            )
+        else:
+            req.activate_controllers = [trajectory_controller]
+            req.deactivate_controllers = ["forward_position_controller"]
+            self.get_logger().info(
+                f"Activating {trajectory_controller}, deactivating forward_position_controller"
+            )
+
+        # Timeout and strictness
+        req.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+        req.strictness = SwitchController.Request.BEST_EFFORT
+
+        # Call controller manager
+        future = self.switch_controller_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+
+        result = future.result()
+        if result is None:
+            self.get_logger().error("Controller switch failed: service call returned None.")
+        else:
+            self.get_logger().info("Controller switch request completed successfully.")
+
+        return result
     
     def start_servo(self):
         # Starts servo node
@@ -438,9 +509,18 @@ class StartHarvest(Node):
             self.future = self.stop_stiffness_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
         
+        elif self.PICK_PATTERN == 'eva_controller_relative_motion': # call my service
+            print("RUN EVA'S CODE WOOOOOO")
+            self.get_logger().info("Running relative Z motion controller (EVA's code)")
+            success = self.call_relative_motion_and_wait()
+            if success:
+                self.get_logger().info("Relative motion completed successfully.")
+            else:
+                self.get_logger().warn("Relative motion failed or returned false.")
+
         else:
             self.get_logger().info(f'No valid control scheme set')
-    
+
     def grasp_controller(self):
         # build request
         request = Trigger.Request()
@@ -476,10 +556,10 @@ class StartHarvest(Node):
         stage_name = prefix if isinstance(prefix, str) else str(prefix)
         print(f"--- Running stage: {stage_name} ---")
         if self.enable_recording:
-            self.start_recording(topics, self.base_data_dir + prefix)
+            self.start_recording(topics, prefix) # removed self.base_data_dir from prefix because it was causing weird path issues
             time.sleep(self.recording_startup_delay)
         # Engage servo or trajectory
-        self.switch_controller(servo=use_servo)
+        self.switch_controller(servo=use_servo, sim=False)
         if use_servo:
             self.start_servo()
         if servo_frame:
@@ -487,7 +567,7 @@ class StartHarvest(Node):
         if action_fn:
             action_fn()
         # Return to trajectory and stop recording
-        self.switch_controller(servo=not use_servo)
+        self.switch_controller(servo=not use_servo, sim=False)
         if self.enable_recording:
             self.stop_recording()
 
@@ -518,21 +598,12 @@ class StartHarvest(Node):
 
             # Stage 3: Approach apple
             input(f'Hit enter to start with apple {idx}')
-            self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
+            self.get_logger().info(f'Approaching apple {idx}: Coord: {coord}')
             if self.use_optimal_trajectory:
                 waypoints = self.call_coord_to_traj(coord)
                 self.trigger_arm_mover(waypoints)
             else:
                 self.trigger_move_arm_to_pose(coord)
-
-            # Stage 4: visual servo
-            if self.enable_visual_servo:
-                input('hit enter to start visual servoing')
-                self.run_stage(self.visual_servo_topics, 
-                               base_dir + self.visual_servo_file_name_prefix,
-                               use_servo=True, 
-                               action_fn=self.start_visual_servo
-                )
 
             # Stage 5 & 6: pressure servo + pick controller
             if self.enable_pressure_servo or self.enable_picking:
@@ -545,7 +616,7 @@ class StartHarvest(Node):
                     self.configure_servo('tool0')
 
                 self.run_stage(
-                    self.pressure_servo_and_pick_controller_topics,
+                    self.relative_motion_controller_topics, # EVA EDIT: I changed this to my topics
                     base_dir + self.final_approach_and_pick_file_name_prefix,
                     servo_frame='base_link',
                     use_servo=True,
@@ -561,6 +632,36 @@ class StartHarvest(Node):
         if self.enable_recording:
             self.save_metadata()
         self.get_logger().info('Batch Complete')
+
+    # def start(self): 
+    #     # Update base directory for new apple location
+    #     base_dir = self.batch_dir + f'apple_{0}/'
+
+    #     # Stage 3: Approach apple
+    #     input(f'Hit enter to approach apple')
+
+    #     # Stage 5 & 6: pressure servo + pick controller
+    #     if self.enable_pressure_servo or self.enable_picking:
+    #         def pick_action():
+    #             if self.enable_picking:
+    #                 self.pick_controller()
+    #             self.configure_servo('tool0')
+
+    #         self.run_stage(
+    #             self.relative_motion_controller_topics, # EVA EDIT: I changed this to my topics
+    #             base_dir + self.final_approach_and_pick_file_name_prefix,
+    #             servo_frame='base_link',
+    #             use_servo=True,
+    #             action_fn=pick_action
+    #         )
+
+    #     # Stage 7: home & release & save
+    #     # input('Done with pick.')
+    #     # self.go_to_home()
+    #     # if self.enable_pressure_servo:
+    #     #     self.release_controller()
+
+    #     self.get_logger().info('Pick Complete')
 
 def main(args=None):
     rclpy.init(args=args)
