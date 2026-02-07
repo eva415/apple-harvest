@@ -77,6 +77,7 @@ install(PROGRAMS
   scripts/pull_twist_controller.py
   scripts/visual_servo.py
   scripts/stiffness_controller.py
+  scripts/eva_controller_relative_motion.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

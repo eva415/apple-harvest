@@ -67,7 +67,7 @@ class StartHarvest(Node):
         self.declare_parameter('enable_visual_servo', False)
         self.declare_parameter('enable_apple_prediction', True)
         self.declare_parameter('enable_pressure_servo', False)    
-        self.declare_parameter('enable_picking', False)           
+        self.declare_parameter('enable_picking', True)           
         self.declare_parameter('optimal_trajectory', False)
 
         # Retrieve parameter values
@@ -106,19 +106,29 @@ class StartHarvest(Node):
             self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
             self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
-            self.start_controller_cli = self.make_client(Empty, 'start_controller')
-            self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
-            self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
-            self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
-            self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
-            self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
-            self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
-            self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
-            self.eva_controller_start_cli = self.make_client(Empty, 'relative_motion/start_controller')
-            self.eva_controller_stop_cli = self.make_client(Empty, 'relative_motion/stop_controller')
-            self.set_goal_cli = self.make_client(SetValue, 'set_goal')
-            self._event_client = ActionClient(self, EventDetection, 'event_detection')
+            # Local controllers (no namespace)
+            self.start_controller_cli = self.make_client(Empty, '/start_controller')
+            self.start_stiffness_controller_cli = self.make_client(Empty, '/start_stiffness_controller')
+            self.stop_controller_cli = self.make_client(Empty, '/stop_controller')
+            self.stop_stiffness_controller_cli = self.make_client(Empty, '/stop_stiffness_controller')
+
+            # Namespaced controllers (these should match the 'name' / namespace of the launched node)
+            # We launched the eva controller node in arm_control.launch.py with name='relative_motion'
+            # so use absolute service names to reach it reliably:
+            self.pull_twist_start_cli = self.make_client(Empty, '/pull_twist/start_controller')
+            self.pull_twist_stop_cli = self.make_client(Empty, '/pull_twist/stop_controller')
+            self.linear_pull_start_cli = self.make_client(Empty, '/linear/start_controller')
+            self.linear_pull_stop_cli = self.make_client(Empty, '/linear/stop_controller')
+
+            # EVA controller (the node you added as name='relative_motion')
+            self.eva_controller_start_cli = self.make_client(Empty, '/relative_motion/start_controller')
+            self.eva_controller_stop_cli  = self.make_client(Empty, '/relative_motion/stop_controller')
+
+            # Controller tuning / goal
+            self.set_goal_cli = self.make_client(SetValue, '/set_goal')
+            self._event_client = ActionClient(self, EventDetection, '/event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
+
 
 
     def make_client(self, srv_type, name):

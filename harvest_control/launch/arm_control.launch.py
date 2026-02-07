@@ -158,6 +158,21 @@ def generate_launch_description():
             executable='pull_twist_controller.py',
             name='pull_twist_controller',
         ),
+
+        Node(
+            package='harvest_control',
+            executable='stiffness_controller.py',
+            name='stiffness_controller',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='eva_controller_relative_motion.py',
+            name='relative_motion',
+            output='screen',
+            parameters=[{ "velocity_scale_xy": 1.0, "velocity_scale_z": 3.0, "control_period": 0.01 }]
+        ),
+
         
         # # Launch C++ node
         # Node(
