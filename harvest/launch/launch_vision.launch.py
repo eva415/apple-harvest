@@ -99,6 +99,6 @@ def generate_launch_description():
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node, 
                              vservo_node, 
-                             palm_camera_node,
+                            #  palm_camera_node,
                              realsense_topics_node
     ])

@@ -48,24 +48,20 @@
         </link>
 
         <link name="gripper_link">
-            <collision>
-                <origin xyz="0.00 0 -0.105" rpy="0 0 0" />
-                <geometry>
-                    <box size="0.12 0.12 0.2" />
-                </geometry>
-            </collision>
-            <visual>
-                <origin xyz="0.085 0 -0.2" rpy="0 0 3.14" />
-                <geometry>
-                    <mesh
-                        filename="package://robot_custom_hardware/meshes/end_effectors/03_mk3_full_assembly_coarse.STL"
-                        scale="0.001 0.001 0.001" />
-                </geometry>
-                <material name="ur5_blue">
-                    <color rgba="0.45 0.62 0.9 1" />
-                </material>
-            </visual>
+        <collision>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+            <cylinder radius="0.05" length="0.285" />
+            </geometry>
+        </collision>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0" />
+            <geometry>
+            <cylinder radius="0.05" length="0.285" />
+            </geometry>
+        </visual>
         </link>
+
 
     </xacro:macro>
 </robot>

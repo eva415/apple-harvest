@@ -59,16 +59,16 @@ class StartHarvest(Node):
         self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
-        self.declare_parameter('pick_pattern', 'force-heuristic')
+        self.declare_parameter('pick_pattern', 'eva-relative-motion')
         self.declare_parameter('event_sensitivity', 0.43)
         self.declare_parameter('recording_startup_delay', 0.5)
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
-        self.declare_parameter('enable_visual_servo', True)
+        self.declare_parameter('enable_visual_servo', False)
         self.declare_parameter('enable_apple_prediction', True)
-        self.declare_parameter('enable_pressure_servo', True)    
-        self.declare_parameter('enable_picking', True)           
-        self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('enable_pressure_servo', False)    
+        self.declare_parameter('enable_picking', False)           
+        self.declare_parameter('optimal_trajectory', False)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -114,6 +114,8 @@ class StartHarvest(Node):
             self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
             self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
             self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
+            self.eva_controller_start_cli = self.make_client(Empty, 'relative_motion/start_controller')
+            self.eva_controller_stop_cli = self.make_client(Empty, 'relative_motion/stop_controller')
             self.set_goal_cli = self.make_client(SetValue, 'set_goal')
             self._event_client = ActionClient(self, EventDetection, 'event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
@@ -436,6 +438,15 @@ class StartHarvest(Node):
             time.sleep(stop_time)
             
             self.future = self.stop_stiffness_controller_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+        
+        elif self.PICK_PATTERN == 'eva-relative-motion':
+            stop_time = 10
+            self.future = self.eva_controller_start_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            time.sleep(stop_time)
+            
+            self.future = self.eva_controller_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
         
         else:
