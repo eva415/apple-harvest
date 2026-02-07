@@ -329,7 +329,7 @@ class FlexToFListener(Node):
     def _enable_servo_mode(self, frame: str = "tool0"):
         req = SwitchController.Request()
         req.activate_controllers = ["forward_position_controller"]
-        req.deactivate_controllers = ["joint_trajectory_controller"]
+        req.deactivate_controllers = ["scaled_joint_trajectory_controller"]
         req.strictness = SwitchController.Request.STRICT
         req.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
         fut = self.switch_cli.call_async(req)
