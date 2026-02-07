@@ -1,1 +1,6 @@
 __pycache__*
+harvest_control/resource/reachable_paths_20260204_173336.npy
+harvest_control/resource/reachable_voxels_20260204_173336.csv
+harvest_control/resource/voxel_ik_data_20260204_173335.csv
+harvest_vision/yolo_networks/v9e.pt
+harvest_vision/yolo_networks/yolov8n.pt
