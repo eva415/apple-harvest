@@ -173,7 +173,14 @@ def generate_launch_description():
             parameters=[{ "velocity_scale_xy": 1.0, "velocity_scale_z": 3.0, "control_period": 0.01 }]
         ),
 
-        
+        Node(
+            package='harvest_control',
+            executable='eva_publish_vacuum.py',
+            name='publish_vacuum',
+            output='screen'
+        ),
+
+
         # # Launch C++ node
         # Node(
         #     package='harvest_control',
@@ -192,4 +199,16 @@ def generate_launch_description():
             executable='record.py',
             name='record_topics_node',
         ),
+
+        # Add this inside your LaunchDescription list, e.g., at the end
+        ExecuteProcess(
+            cmd=[
+                '/bin/bash', '-c',
+                'source /opt/ros/humble/setup.bash && '
+                'source ~/uros_ws/install/local_setup.bash && '
+                'ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyUSB0'
+            ],
+            output='screen'
+        ),
+
     ])

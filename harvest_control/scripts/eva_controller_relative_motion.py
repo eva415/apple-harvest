@@ -92,6 +92,10 @@ class FlexToFListener(Node):
     # --- SERVICE HANDLERS ---
     def handle_start(self, request, response):
         """Called by start_harvest via Empty service. Lazily set up clients and enable servo."""
+        if not self._clients_ready:
+            self._setup_servo_clients()
+            self._enable_servo_mode("tool0")
+            self._clients_ready = True
         if not self.running:
             self.get_logger().info("start_controller called: starting controller...")
 
@@ -191,9 +195,10 @@ class FlexToFListener(Node):
         diff = self.get_tof_diff()
 
         if diff is not None:
-            self.get_logger().info(f"ToF change over buffer: {diff}")
+            # self.get_logger().info(f"ToF change over buffer: {diff}")
+            pass
 
-        print(f"CONTROLLER: {self.controller}, STATE: {self.state}, tof: {self.tof_distance}, pressure: {self.latest_pressure}")
+        self.get_logger().info(f"Running?: {self.running}, CONTROLLER: {self.controller}, STATE: {self.state}, tof: {self.tof_distance}, pressure: {self.latest_pressure}")
         now = self.get_clock().now().nanoseconds * 1e-9
         dt = now - self.prev_time
         self.prev_time = now
@@ -208,16 +213,132 @@ class FlexToFListener(Node):
         ex = abs(self.smoothed_x - self.current_x)
         ey = abs(self.smoothed_y - self.current_y)
 
-        # --- (rest of your original state machine & publication logic unchanged) ---
-        # ... (I left your existing state machine and publish code intact) ...
 
-        # For brevity the rest of the method is unchanged from your original.
-        # (Paste the remainder of your original control_loop body here.)
-        # Make sure the final publishing to self.gripper_pub and self.apple_pub remains as in your original file.
-        #
-        # (Since the remainder is long and unmodified, keep your existing implementation.)
-        #
-        pass  # <-- keep your original control_loop body here (replace this pass)
+        # --- State transitions ---
+        if self.controller == 'default':
+            if self.state == 'servo':
+                # Switch to 'approach' if centered OR below servo threshold
+                if (ex < self.position_threshold and ey < self.position_threshold) or self.tof_distance <= self.tof_servo_threshold:
+                    self.state = 'approach'
+            elif self.state == 'approach':
+                if self.tof_distance > self.tof_servo_threshold and (ex > self.position_threshold or ey > self.position_threshold):
+                    self.state = 'servo'
+                elif self.tof_distance <= self.tof_relative_motion_threshold:
+                    self.controller = 'relative_controller'
+        if self.controller == 'relative_controller':
+            if self.state == 'servo':
+                # Switch to 'approach' if centered OR below servo threshold
+                if (ex < self.position_threshold and ey < self.position_threshold) or self.tof_distance <= self.tof_servo_threshold:
+                    self.state = 'approach'
+            if self.state == 'approach':
+                if ex > self.position_threshold or ey > self.position_threshold:
+                    self.state = 'servo'
+                if self.get_tof_diff() < 0: # apple is getting closer
+                    self.get_logger().info("apple is getting closer")
+                elif self.get_tof_diff() > 1: # apple is being pushed away
+                    self.get_logger().info("apple is getting pushed away")
+                    self.state = 'reverse'
+                else: # apple is nicely aligned
+                    self.get_logger().info("apple is nicely aligned")
+                    self.state = 'pick'
+                    self.pick_start_time = now
+                    self.latest_pressure = None
+                    self.get_logger().info(f'Picking: turning on vacuum (tof = {self.tof_distance})')
+                    self.pump.vacuum_on()
+            if self.state == 'reverse':
+                if self.get_tof_diff() < 0: # apple is getting closer
+                    self.get_logger().info("apple is getting closer")
+                elif self.get_tof_diff() > 1: # apple is being pushed away
+                    self.get_logger().info("apple is getting further away")
+                    self.state = 'approach'
+                else: # apple is nicely aligned
+                    self.get_logger().info("apple is nicely aligned") #TODO: when this triggers, the apple is a little too far away, how to fix this?
+                    self.state = 'pick'
+                    self.pick_start_time = now
+                    self.latest_pressure = None
+                    self.get_logger().info(f'Picking: turning on vacuum (tof = {self.tof_distance})')
+                    self.pump.vacuum_on()
+            elif self.state == 'pick':
+                # immediate brake:
+                self.prev_cmd_x = self.prev_cmd_y = self.prev_cmd_z = 0.00
+                elapsed = now - self.pick_start_time
+                pressure = self.latest_pressure if self.latest_pressure is not None else float('inf')
+                self.get_logger().info(f"[DEBUG] pick elapsed={elapsed:.2f}, pressure={pressure}")
+                # Success
+                if pressure <= -50:
+                    self.get_logger().info(f'Vacuum succeeded (pressure={pressure})')
+                    self.state = 'release'
+                    self.release_start_time = now
+                # Timeout
+                elif elapsed > 10.0:
+                    self.get_logger().warn(f'Pick failed: timeout (pressure={pressure})')
+                    self.pump.vacuum_off()
+                    self.state = 'failed'  # use a failure state instead of immediate shutdown
+            elif self.state == 'release':
+                elapsed_release = now - self.release_start_time
+                self.get_logger().info(f"RELEASE: {elapsed_release}")
+                if elapsed_release < 2.0:
+                    self.get_logger().info(f"retreating...")
+                elif elapsed_release > 2.0 and elapsed_release < 4.0:
+                    self.get_logger().info(f"releasing apple now...")
+                    self.pump.vacuum_off()
+                elif elapsed_release >= 4.0:
+                    self.get_logger().info('done')
+                    self.state = 'done'
+
+        cmd_wz = 0.0   # default: no rotation
+        # --- Command selection ---
+        if self.state == 'servo':
+            cmd_vx, cmd_vy, cmd_vz = -vx, -vy, 0.1
+        elif self.state == 'approach':
+            cmd_vx, cmd_vy = 0.0, 0.0
+            cmd_vz = 0.1 * self.velocity_scale_factor_z
+        elif self.state == 'reverse':
+            cmd_vx, cmd_vy = 0.0, 0.0
+            cmd_vz = -0.1 * self.velocity_scale_factor_z
+        elif self.state == 'release':
+            elapsed_release = now - self.release_start_time
+            if elapsed_release < 2.0:
+                cmd_vx, cmd_vy, cmd_vz = 0.0, 0.0, -2.0
+                cmd_wz = -4.0
+            elif elapsed_release < 4.0:
+                cmd_vx, cmd_vy, cmd_vz = 0.0, 0.0, 0.0
+                cmd_wz = 4.0
+        else: # pick state or done state
+            cmd_vx = cmd_vy = cmd_vz = 0.0
+
+
+
+        # --- Acceleration limit + smoothing ---
+        dvx = np.clip(cmd_vx - self.prev_cmd_x, -self.acc_max * dt, self.acc_max * dt)
+        dvy = np.clip(cmd_vy - self.prev_cmd_y, -self.acc_max * dt, self.acc_max * dt)
+        dvz = np.clip(cmd_vz - self.prev_cmd_z, -self.acc_max * dt, self.acc_max * dt)
+
+        raw_x = self.prev_cmd_x + dvx
+        raw_y = self.prev_cmd_y + dvy
+        raw_z = self.prev_cmd_z + dvz
+
+        out_x = self.alpha_cmd * raw_x + (1 - self.alpha_cmd) * self.prev_cmd_x
+        out_y = self.alpha_cmd * raw_y + (1 - self.alpha_cmd) * self.prev_cmd_y
+        out_z = self.alpha_cmd * raw_z + (1 - self.alpha_cmd) * self.prev_cmd_z
+        self.prev_cmd_x, self.prev_cmd_y, self.prev_cmd_z = out_x, out_y, out_z
+
+        # Publish twist
+        cmd = TwistStamped()
+        cmd.header.stamp = self.get_clock().now().to_msg()
+        cmd.header.frame_id = 'tool0'
+        cmd.twist.linear.x = out_x
+        cmd.twist.linear.y = out_y
+        cmd.twist.linear.z = out_z
+        cmd.twist.angular.x = cmd.twist.angular.y = 0.0
+        cmd.twist.angular.z = cmd_wz
+        self.gripper_pub.publish(cmd)
+        # self.get_logger().info(f"PUBLISHING COMMAND!!!!: {cmd}")
+
+        # Debug apple pos
+        apple = Float32MultiArray(data=[float(self.x[1]), float(self.x[0])])
+        self.apple_pub.publish(apple)
+
 
     # The rest of your helper functions are unchanged; include them as-is:
     def _init_kalman(self):

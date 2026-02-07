@@ -96,9 +96,18 @@ def generate_launch_description():
                       }
                 ])
     
+    usb_cam_node = launch_ros.actions.Node(
+                package="usb_cam",
+                executable="usb_cam_node_exe",
+                name="usb_cam_node",
+                parameters=[{"video_device": "/dev/video6"}],
+                output="screen"
+            )
+    
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node, 
                              vservo_node, 
                             #  palm_camera_node,
+                            usb_cam_node,
                              realsense_topics_node
     ])
