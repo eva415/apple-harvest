@@ -64,11 +64,9 @@ class StartHarvest(Node):
         self.declare_parameter('recording_startup_delay', 0.5)
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
-        self.declare_parameter('enable_visual_servo', False)
         self.declare_parameter('enable_apple_prediction', True)
-        self.declare_parameter('enable_pressure_servo', False)    
         self.declare_parameter('enable_picking', True)           
-        self.declare_parameter('optimal_trajectory', False)
+        self.declare_parameter('optimal_trajectory', True)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -76,9 +74,7 @@ class StartHarvest(Node):
         self.recording_startup_delay = self.get_parameter('recording_startup_delay').get_parameter_value().double_value
         self.base_data_dir = self.get_parameter('base_data_dir').get_parameter_value().string_value
         self.enable_recording = self.get_parameter('enable_recording').get_parameter_value().bool_value
-        self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
-        self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value 
         self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value 
         self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value 
 
@@ -98,13 +94,8 @@ class StartHarvest(Node):
             self.stop_record_client = self.make_client(Trigger, 'stop_recording')
             # Initialize metadata and topics
             self.init_metadata_and_topics()
-        if self.enable_visual_servo:
-            self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
         if self.enable_apple_prediction:
             self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
-        if self.enable_pressure_servo:
-            self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
-            self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
             # Local controllers (no namespace)
             self.start_controller_cli = self.make_client(Empty, '/start_controller')
@@ -142,19 +133,17 @@ class StartHarvest(Node):
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
         # Recording topics
-        self.prediction_topics = ['/apple_markers']
+        self.prediction_topics = ['/apple_markers', '/apple_annotated'] # added apple_annotated to the bag
         self.approach_trajectory_topics = ['/apple_markers']
-        self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
-        self.pressure_servo_topics = [
-            '/gripper/pressure','/gripper/distance','/gripper/motor/current',
-            '/gripper/motor/position','/gripper/motor/velocity','/joint_states',
-            '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
-        ]
         self.pick_controller_topics = [
             '/gripper/pressure','/gripper/distance','/joint_states',
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
-        self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
+        # I use topics below as the ones being recorded during my relative_motion_controller actions
+        self.relative_motion_controller_topics = [
+            '/tof_sensor_data', '/flex_sensor_data', '/joint_states', '/tool_pose', '/gripper_tip', '/servo_node/delta_twist_cmds',
+            '/force_torque_sensor_broadcaster/wrench', '/vacuum_pressure', '/image_raw', '/camera/mast_camera/color/image_raw'
+        ]
 
         # Batch directories
         self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
@@ -162,8 +151,6 @@ class StartHarvest(Node):
         # File prefixes
         self.prediction_file_name_prefix = 'prediction'
         self.approach_trajectory_file_name_prefix = 'approach_trajectory'
-        self.visual_servo_file_name_prefix = 'visual_servo'
-        self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
         self.final_approach_and_pick_file_name_prefix = 'final_approach_and_pick'
 
@@ -305,16 +292,16 @@ class StartHarvest(Node):
         if servo:
             if not sim:
                 self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
+                self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
             else:
                 self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
+                self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
         else:
             if not sim:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
+                self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
             else:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
+                self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
         self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
 
@@ -503,8 +490,10 @@ class StartHarvest(Node):
         self.switch_controller(servo=use_servo)
         if use_servo:
             self.start_servo()
+            self.get_logger().info("Starting servo node...")
         if servo_frame:
             self.configure_servo(servo_frame)
+            self.get_logger().info(f"Configuring servo frame to {servo_frame}")
         if action_fn:
             action_fn()
         # Return to trajectory and stop recording
@@ -546,38 +535,27 @@ class StartHarvest(Node):
             else:
                 self.trigger_move_arm_to_pose(coord)
 
-            # Stage 4: visual servo
-            if self.enable_visual_servo:
-                input('hit enter to start visual servoing')
-                self.run_stage(self.visual_servo_topics, 
-                               base_dir + self.visual_servo_file_name_prefix,
-                               use_servo=True, 
-                               action_fn=self.start_visual_servo
-                )
-
-            # Stage 5 & 6: pressure servo + pick controller
-            if self.enable_pressure_servo or self.enable_picking:
+            # Stage 4: pick controller
+            if self.enable_picking:
                 input('Done with approach, hit enter to start pressure servoing and pick controller')
                 def pick_action():
-                    if self.enable_pressure_servo:
-                        self.grasp_controller()
                     if self.enable_picking:
                         self.pick_controller()
                     self.configure_servo('tool0')
 
                 self.run_stage(
-                    self.pressure_servo_and_pick_controller_topics,
+                    self.relative_motion_controller_topics, # I edited these to match my topics
                     base_dir + self.final_approach_and_pick_file_name_prefix,
                     servo_frame='base_link',
                     use_servo=True,
                     action_fn=pick_action
                 )
 
-            # Stage 7: home & release & save
+            # Stage 5: home & release & save
             input('Done with pick, hit enter to return home')
             self.go_to_home()
-            if self.enable_pressure_servo:
-                self.release_controller()
+            # if self.enable_pressure_servo: TODO: MAY BE NICE TO EDIT, TO DROP THE APPLE AT THIS POINT, RATHER THAN EARLIER (inside my controller
+            #     self.release_controller()
 
         if self.enable_recording:
             self.save_metadata()

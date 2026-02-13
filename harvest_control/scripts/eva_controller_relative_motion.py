@@ -46,6 +46,8 @@ class FlexToFListener(Node):
         self.tof_distance = None
         self.latest_pressure = None
 
+        self._auto_stop_timer = None
+
         # Publishers & Subscribers
         self.apple_pub = self.create_publisher(Float32MultiArray, '/position_apple', 10)
         self.gripper_pub = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
@@ -90,81 +92,73 @@ class FlexToFListener(Node):
 
 
     # --- SERVICE HANDLERS ---
+    # update handle_start to store the timer and avoid creating duplicates
     def handle_start(self, request, response):
-        """Called by start_harvest via Empty service. Lazily set up clients and enable servo."""
-        if not self._clients_ready:
-            self._setup_servo_clients()
-            self._enable_servo_mode("tool0")
-            self._clients_ready = True
         if not self.running:
             self.get_logger().info("start_controller called: starting controller...")
-
-            # (existing lazy setup code here)
-
+            # ... existing startup code ...
             self.running = True
             self.state = 'approach'
-            self.controller = 'relative_controller'
+            self.controller = 'default'
             self.get_logger().info("Controller started.")
 
             # --- AUTO STOP AFTER 10 SECONDS ---
             stop_time = 10.0  # seconds
             self.get_logger().info(f"Controller will auto-stop in {stop_time} seconds")
-            self.create_timer(stop_time, self._auto_stop_once, callback_group=self.cbgroup)
 
+            # If for some reason a leftover timer exists, destroy it first
+            if self._auto_stop_timer is not None:
+                try:
+                    self.destroy_timer(self._auto_stop_timer)
+                except Exception:
+                    pass
+                self._auto_stop_timer = None
+
+            # store the timer so we can cancel/destroy it later
+            self._auto_stop_timer = self.create_timer(stop_time, self._auto_stop_once, callback_group=self.cbgroup)
         else:
             self.get_logger().info("start_controller called but controller already running.")
         return response
 
+    # change _auto_stop_once so it destroys the timer (one-shot behavior)
     def _auto_stop_once(self):
         """Stops the controller automatically (called by timer)."""
         self.get_logger().info("Auto-stop timer triggered.")
-        req = Empty.Request()
-        self.handle_stop(req, None)  # stop controller safely
-        # cancel the timer so it only runs once
-        # Note: create_timer returns a Timer object, store it if you need to cancel
+        try:
+            # safe stop
+            req = Empty.Request()
+            self.handle_stop(req, None)
+        except Exception as e:
+            self.get_logger().debug(f"_auto_stop_once: error calling handle_stop: {e}")
 
+        # destroy the timer so it doesn't keep firing
+        if self._auto_stop_timer is not None:
+            try:
+                self.destroy_timer(self._auto_stop_timer)
+            except Exception as e:
+                self.get_logger().debug(f"Could not destroy auto-stop timer: {e}")
+            self._auto_stop_timer = None
 
+    # ensure handle_stop also clears/destroys the timer when stopping manually
     def handle_stop(self, request, response):
-        """Called by start_harvest via Empty service. Stops controller and makes sure vacuum and motion are safe."""
         if self.running:
             self.get_logger().info("stop_controller: stopping controller, publishing zero twist, and turning off vacuum...")
-            # set running False to make timer stop publishing
             self.running = False
+            # ... existing shutdown actions ...
 
-            # publish zero twist to stop motion immediately
-            zero_cmd = TwistStamped()
-            zero_cmd.header.stamp = self.get_clock().now().to_msg()
-            zero_cmd.header.frame_id = 'tool0'
-            zero_cmd.twist.linear.x = zero_cmd.twist.linear.y = zero_cmd.twist.linear.z = 0.0
-            zero_cmd.twist.angular.x = zero_cmd.twist.angular.y = zero_cmd.twist.angular.z = 0.0
-            try:
-                self.gripper_pub.publish(zero_cmd)
-            except Exception:
-                pass
-
-            # ensure vacuum off
-            try:
-                if hasattr(self, "pump"):
-                    self.pump.vacuum_off()
-            except Exception:
-                pass
-
-            # Optionally switch controller back to joint trajectory — minimal / safe attempt:
-            try:
-                req = SwitchController.Request()
-                req.activate_controllers = ["joint_trajectory_controller"]
-                req.deactivate_controllers = ["forward_position_controller"]
-                req.strictness = SwitchController.Request.BEST_EFFORT
-                req.timeout = rclpy.duration.Duration(seconds=2.0).to_msg()
-                fut = self.switch_cli.call_async(req)
-                rclpy.spin_until_future_complete(self, fut)
-            except Exception as e:
-                self.get_logger().debug(f"stop_controller: couldn't switch controllers ({e}) — continuing shutdown.")
+            # destroy any pending auto-stop timer
+            if self._auto_stop_timer is not None:
+                try:
+                    self.destroy_timer(self._auto_stop_timer)
+                except Exception:
+                    pass
+                self._auto_stop_timer = None
 
             self.get_logger().info("Controller stopped and vacuum disabled.")
         else:
             self.get_logger().info("stop_controller called but controller already stopped.")
         return response
+
 
     # --- SUBSCRIBERS & PUBLISHERS (unchanged) ---
     def flex_callback(self, msg):
@@ -407,10 +401,13 @@ class FlexToFListener(Node):
         self.current_x_vel, self.current_y_vel = vx, vy
         return vx * self.velocity_scale_factor_xy, vy * self.velocity_scale_factor_xy
 
-    def _enable_servo_mode(self, frame: str = "tool0"):
+    def _enable_servo_mode(self, frame: str = "tool0", sim=False):
         req = SwitchController.Request()
         req.activate_controllers = ["forward_position_controller"]
-        req.deactivate_controllers = ["scaled_joint_trajectory_controller"]
+        if sim:
+            req.deactivate_controllers = ["scaled_joint_trajectory_controller"]
+        else:
+            req.deactivate_controllers = ["scaled_joint_trajectory_controller"]
         req.strictness = SwitchController.Request.STRICT
         req.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
         fut = self.switch_cli.call_async(req)
