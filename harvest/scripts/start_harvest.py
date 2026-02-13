@@ -64,7 +64,7 @@ class StartHarvest(Node):
         self.declare_parameter('recording_startup_delay', 0.5)
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
-        self.declare_parameter('enable_apple_prediction', True)
+        self.declare_parameter('enable_apple_prediction', False)
         self.declare_parameter('enable_picking', True)           
         self.declare_parameter('optimal_trajectory', True)
 
@@ -500,6 +500,23 @@ class StartHarvest(Node):
         self.switch_controller(servo=not use_servo)
         if self.enable_recording:
             self.stop_recording()
+    
+    # Checks if a pose is within the UR5 workspace.
+    def is_within_reach(self, pose, min_reach=0.2, max_reach=0.8):      
+        # UR5e specs: max radius is 0.85m. min is 0.076
+        p = pose.position
+        
+        # Subtract the UR5e base offset from the apple's position
+        dx = p.x - (-0.095)
+        dy = p.y - 0.306
+        dz = p.z - 1.048
+        
+        # Calculate Euclidean distance from the ACTUAL arm base
+        distance = np.sqrt(dx**2 + dy**2 + dz**2)
+        print(f"DISTANCE: {distance}")
+        
+        return min_reach <= distance <= max_reach
+
 
     def start(self): 
         # Stage 1: Reset arm to home position
@@ -517,12 +534,18 @@ class StartHarvest(Node):
                 Pose(position=Point(x=row[0], y=row[1], z=row[2]))
                 for row in self.pre_saved_apple_locations
             ]
+        
+        # Filter the list to only include reachable apples
+        reachable_apples = [p for p in apple_poses.poses if self.is_within_reach(p)]
+
+        self.get_logger().info(f"Found {len(apple_poses.poses)} apples, {len(reachable_apples)} are reachable.")
+
+        # Only iterate through the reachable ones
         self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
-                                    for i,p in enumerate(apple_poses.poses)}
-        self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
+                                    for i,p in enumerate(reachable_apples)}
 
         # Loop over apple locations
-        for idx, coord in enumerate(apple_poses.poses):
+        for idx, coord in enumerate(reachable_apples):
             # Update base directory for new apple location
             base_dir = self.batch_dir + f'apple_{idx}/'
 

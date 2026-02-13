@@ -90,7 +90,8 @@ class CoordinateToTrajectoryService(Node):
         self.z_filter_ranges = np.array([(entry['min'], entry['max']) for entry in data['z_wire_heights']])
 
     def publish_apple_markers(self):
-        apple_loc = [[-0.25, 0.6, 0.5], [0.0, 0.5, 0.6], [0.15, 0.5, 0.7], [0.15, 0.5, 0.8], [0.0, 0.4, 0.9], [-0.15, 0.4, 0.9]]
+        # apple_loc = [[-0.25, 0.6, 0.5], [0.0, 0.5, 0.6], [0.15, 0.5, 0.7], [0.15, 0.5, 0.8], [0.0, 0.4, 0.9], [-0.15, 0.4, 0.9]]
+        apple_loc = [[-0.095, 0.306, 1.048]] # eva testing stuff. this is the center of the ur5e arm base.
         
         marker_array = MarkerArray()
         for i, apple in enumerate(apple_loc):

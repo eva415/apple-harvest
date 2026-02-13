@@ -20,6 +20,14 @@ from eva_vacuum_test import PumpIO # my vacuum control file
 import time
 from collections import deque
 
+FLEX_CONTROLLER = True  # change to False to stop flex sensor servoing
+
+TOF_CONTROLLER = True   # change to False to use a distance-only trigger (not relative distance)
+
+PRESSURE_CONTROLLER = True  # change to False to stop pressure threshold logic
+PRESSURE_THRESHOLD = -56    # this is a "good enough" pressure to reach, to continue onto picking motion
+PRESSURE_CONTROLLER_TIMEOUT = 5.0   # waits 5 seconds before starting picking motion
+
 
 class FlexToFListener(Node):
     def __init__(self, calibrate=False):
@@ -216,9 +224,20 @@ class FlexToFListener(Node):
                     self.state = 'approach'
             elif self.state == 'approach':
                 if self.tof_distance > self.tof_servo_threshold and (ex > self.position_threshold or ey > self.position_threshold):
-                    self.state = 'servo'
+                    if FLEX_CONTROLLER:
+                        self.state = 'servo'
                 elif self.tof_distance <= self.tof_relative_motion_threshold:
-                    self.controller = 'relative_controller'
+                    if TOF_CONTROLLER:
+                        self.controller = 'relative_controller'
+                    else:
+                        # --- TOF_CONTROLLER is False: Open-Loop Pick ---
+                        self.controller = 'relative_controller'
+                        self.get_logger().info("ToF Controller OFF: triggering open-loop pick")
+                        self.state = 'pick'
+                        self.pick_start_time = now
+                        self.latest_pressure = None
+                        self.get_logger().info(f'Picking: turning on vacuum (tof = {self.tof_distance})')
+                        self.pump.vacuum_on()
         if self.controller == 'relative_controller':
             if self.state == 'servo':
                 # Switch to 'approach' if centered OR below servo threshold
@@ -226,7 +245,8 @@ class FlexToFListener(Node):
                     self.state = 'approach'
             if self.state == 'approach':
                 if ex > self.position_threshold or ey > self.position_threshold:
-                    self.state = 'servo'
+                    if FLEX_CONTROLLER:
+                        self.state = 'servo'
                 if self.get_tof_diff() < 0: # apple is getting closer
                     self.get_logger().info("apple is getting closer")
                 elif self.get_tof_diff() > 1: # apple is being pushed away
@@ -246,7 +266,7 @@ class FlexToFListener(Node):
                     self.get_logger().info("apple is getting further away")
                     self.state = 'approach'
                 else: # apple is nicely aligned
-                    self.get_logger().info("apple is nicely aligned") #TODO: when this triggers, the apple is a little too far away, how to fix this?
+                    self.get_logger().info("apple is nicely aligned")
                     self.state = 'pick'
                     self.pick_start_time = now
                     self.latest_pressure = None
@@ -259,12 +279,13 @@ class FlexToFListener(Node):
                 pressure = self.latest_pressure if self.latest_pressure is not None else float('inf')
                 self.get_logger().info(f"[DEBUG] pick elapsed={elapsed:.2f}, pressure={pressure}")
                 # Success
-                if pressure <= -50:
-                    self.get_logger().info(f'Vacuum succeeded (pressure={pressure})')
-                    self.state = 'release'
-                    self.release_start_time = now
+                if PRESSURE_CONTROLLER:
+                    if pressure <= PRESSURE_THRESHOLD:
+                        self.get_logger().info(f'Vacuum succeeded (pressure={pressure})')
+                        self.state = 'release'
+                        self.release_start_time = now
                 # Timeout
-                elif elapsed > 10.0:
+                elif elapsed > PRESSURE_CONTROLLER_TIMEOUT:
                     self.get_logger().warn(f'Pick failed: timeout (pressure={pressure})')
                     self.pump.vacuum_off()
                     self.state = 'failed'  # use a failure state instead of immediate shutdown
