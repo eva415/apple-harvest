@@ -91,7 +91,8 @@ class CoordinateToTrajectoryService(Node):
 
     def publish_apple_markers(self):
         # apple_loc = [[-0.25, 0.6, 0.5], [0.0, 0.5, 0.6], [0.15, 0.5, 0.7], [0.15, 0.5, 0.8], [0.0, 0.4, 0.9], [-0.15, 0.4, 0.9]]
-        apple_loc = [[-0.095, 0.306, 1.048]] # eva testing stuff. this is the center of the ur5e arm base.
+        # apple_loc = [[-0.095, 0.306, 1.048]] # eva testing stuff. this is the center of the ur5e arm base.
+        apple_loc = [[-0.095, 0.886, 1.758]] # eva testing stuff. this is an apple location
         
         marker_array = MarkerArray()
         for i, apple in enumerate(apple_loc):

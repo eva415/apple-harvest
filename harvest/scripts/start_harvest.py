@@ -66,7 +66,7 @@ class StartHarvest(Node):
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_apple_prediction', False)
         self.declare_parameter('enable_picking', True)           
-        self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('optimal_trajectory', False)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -502,7 +502,7 @@ class StartHarvest(Node):
             self.stop_recording()
     
     # Checks if a pose is within the UR5 workspace.
-    def is_within_reach(self, pose, min_reach=0.2, max_reach=0.8):      
+    def is_within_reach(self, pose, min_reach=0.2, max_reach=0.95):      
         # UR5e specs: max radius is 0.85m. min is 0.076
         p = pose.position
         
@@ -524,55 +524,55 @@ class StartHarvest(Node):
         self.go_to_home()
 
         # Stage 2: Request apple location prediction
-        if self.enable_apple_prediction:
-            self.get_logger().info('Predicting apple locations')
-            apple_poses = self.start_apple_prediction()
-        else:
-            self.get_logger().info('Skipping apple prediction, using pre-saved locations')
-            apple_poses = PoseArray()
-            apple_poses.poses = [
-                Pose(position=Point(x=row[0], y=row[1], z=row[2]))
-                for row in self.pre_saved_apple_locations
-            ]
+        # if self.enable_apple_prediction:
+        #     self.get_logger().info('Predicting apple locations')
+        #     apple_poses = self.start_apple_prediction()
+        # else:
+        #     self.get_logger().info('Skipping apple prediction, using pre-saved locations')
+        #     apple_poses = PoseArray()
+        #     apple_poses.poses = [
+        #         Pose(position=Point(x=row[0], y=row[1], z=row[2]))
+        #         for row in self.pre_saved_apple_locations
+        #     ]
         
-        # Filter the list to only include reachable apples
-        reachable_apples = [p for p in apple_poses.poses if self.is_within_reach(p)]
+        # # Filter the list to only include reachable apples
+        # reachable_apples = [p for p in apple_poses.poses if self.is_within_reach(p)]
 
-        self.get_logger().info(f"Found {len(apple_poses.poses)} apples, {len(reachable_apples)} are reachable.")
+        # self.get_logger().info(f"Found {len(apple_poses.poses)} apples, {len(reachable_apples)} are reachable.")
 
-        # Only iterate through the reachable ones
-        self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
-                                    for i,p in enumerate(reachable_apples)}
+        # # Only iterate through the reachable ones
+        # self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
+        #                             for i,p in enumerate(reachable_apples)}
 
-        # Loop over apple locations
-        for idx, coord in enumerate(reachable_apples):
-            # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{idx}/'
+        # # Loop over apple locations
+        # for idx, coord in enumerate(reachable_apples):
+        #     # Update base directory for new apple location
+        base_dir = self.batch_dir + f'apple_{0}/'
 
-            # Stage 3: Approach apple
-            input(f'Hit enter to start with apple {idx}')
-            self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
-            if self.use_optimal_trajectory:
-                waypoints = self.call_coord_to_traj(coord)
-                self.trigger_arm_mover(waypoints)
-            else:
-                self.trigger_move_arm_to_pose(coord)
+        #     # Stage 3: Approach apple
+        #     input(f'Hit enter to start with apple {idx}')
+        #     self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
+        #     if self.use_optimal_trajectory:
+        #         waypoints = self.call_coord_to_traj(coord)
+        #         self.trigger_arm_mover(waypoints)
+        #     else:
+        #         self.trigger_move_arm_to_pose(coord)
 
-            # Stage 4: pick controller
-            if self.enable_picking:
-                input('Done with approach, hit enter to start pressure servoing and pick controller')
-                def pick_action():
-                    if self.enable_picking:
-                        self.pick_controller()
-                    self.configure_servo('tool0')
+        # Stage 4: pick controller
+        if self.enable_picking:
+            input('Done with approach, hit enter to start pressure servoing and pick controller')
+            def pick_action():
+                if self.enable_picking:
+                    self.pick_controller()
+                self.configure_servo('tool0')
 
-                self.run_stage(
-                    self.relative_motion_controller_topics, # I edited these to match my topics
-                    base_dir + self.final_approach_and_pick_file_name_prefix,
-                    servo_frame='base_link',
-                    use_servo=True,
-                    action_fn=pick_action
-                )
+            self.run_stage(
+                self.relative_motion_controller_topics, # I edited these to match my topics
+                base_dir + self.final_approach_and_pick_file_name_prefix,
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=pick_action
+            )
 
             # Stage 5: home & release & save
             input('Done with pick, hit enter to return home')
