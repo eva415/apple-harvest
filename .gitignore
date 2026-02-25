@@ -5,3 +5,4 @@ harvest_control/resource/voxel_ik_data_20260204_173335.csv
 harvest_vision/yolo_networks/v9e.pt
 harvest_vision/yolo_networks/yolov8n.pt
 .vscode/
+harvest_control/resource/rf_pick_classifier.joblib

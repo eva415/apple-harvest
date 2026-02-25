@@ -438,7 +438,7 @@ class StartHarvest(Node):
             rclpy.spin_until_future_complete(self, self.future)
         
         elif self.PICK_PATTERN == 'eva-relative-motion':
-            stop_time = 10
+            stop_time = 20
             self.future = self.eva_controller_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             time.sleep(stop_time)

@@ -11,7 +11,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
-from std_srvs.srv import Trigger, Empty                                      # <-- Empty added
+from std_srvs.srv import Trigger, Empty
 from std_msgs.msg import Float32MultiArray, Int32, Float32
 from geometry_msgs.msg import TwistStamped, WrenchStamped  # to publish to the UR5
 from controller_manager_msgs.srv import SwitchController
@@ -22,6 +22,10 @@ from collections import deque
 import joblib
 from ament_index_python.packages import get_package_share_directory
 from pathlib import Path
+from collections import deque
+# at top of file (merge with existing imports)
+from rclpy.qos import QoSProfile
+from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 
 FLEX_CONTROLLER = False  # change to False to stop flex sensor servoing
@@ -32,6 +36,7 @@ PRESSURE_CONTROLLER = False  # change to False to stop pressure threshold logic
 PRESSURE_THRESHOLD = -56    # this is a "good enough" pressure to reach, to continue onto picking motion
 PRESSURE_CONTROLLER_TIMEOUT = 5.0   # waits 5 seconds before starting picking motion
 
+RF_CONTROLLER = True
 PICKING_TIME = 2.0
 RELEASE_TIME = 4.0
 
@@ -98,14 +103,92 @@ class FlexToFListener(Node):
         # --- CLIENTS READY FLAG (we'll set up blocking clients lazily on start) ---
         self._clients_ready = False
 
-        # --- ADDED: create start/stop services immediately so start_harvest can connect right away ---
-        # Use relative service names; when you launch the node under namespace 'relative_motion'
-        # these resolve to /relative_motion/start_controller etc.
+        # --- start/stop services
         self.start_service = self.create_service(Empty, 'relative_motion/start_controller', self.handle_start)
         self.stop_service  = self.create_service(Empty, 'relative_motion/stop_controller', self.handle_stop)
 
         self.get_logger().info('FlexToFListener initialized (start/stop services created).')
+
+        # --- RF MODEL SETUP
+        self.rf_model = None
+        self.rf_model_loaded = False
         
+        # Default safe values (in case load fails)
+        self.rf_window_size = 5 
+        self.rf_feature_order = ["Flex", "Pressure", "Force", "TOF"]
+        self.rf_scaler = None
+
+        self._force_raw_buffer = deque(maxlen=21) # Pre-filter buffer
+
+        # RF inference timing
+        self.last_rf_time = 0.0
+        self.rf_period = 0.009
+
+        self._last_built_X = None # last built aligned window (set by rf_sync_cb)
+
+        # init sliding-window history dict
+        self._rf_hist = {k: deque(maxlen=self.rf_window_size) for k in self.rf_feature_order}
+
+        if RF_CONTROLLER:
+            model_path = Path(
+                get_package_share_directory("harvest_control")
+            ) / "resource" / "rf_pick_classifier.joblib"
+
+            try:
+                data = joblib.load(model_path)
+
+                # 1. Extract Model
+                if isinstance(data, dict) and "model" in data:
+                    self.rf_model = data["model"]
+                elif hasattr(data, "predict"):
+                    self.rf_model = data
+                else:
+                    raise RuntimeError(f"Unrecognized model format: {type(data)}")
+
+                # 2. Extract Metadata (Overwrite defaults)
+                self.rf_window_size = int(data.get("window_size", 5))
+                self.rf_feature_order = list(data.get("feature_order", ["Flex", "Pressure", "Force", "TOF"]))
+                self.rf_scaler = data.get("scalar", None)
+
+                # 3. Initialize History Buffers matching the trained feature order
+                self._rf_hist = {k: deque(maxlen=self.rf_window_size) for k in self.rf_feature_order}
+                self._force_raw_buffer = deque(maxlen=21)
+                
+                self.rf_model_loaded = True
+
+                self.get_logger().info(
+                    f"RF loaded. Window: {self.rf_window_size}, Features: {self.rf_feature_order}"
+                )
+
+            except Exception as e:
+                self.get_logger().error(f"Failed to load RF model. RF Control DISABLED. Error: {e}")
+                self.rf_model_loaded = False
+                # Initialize empty buffers to prevent AttributeErrors later if code tries to access them
+
+        # ----- set up ApproximateTimeSynchronizer subscribers for RF feature alignment -----
+        if RF_CONTROLLER and self.rf_model_loaded:
+            try:
+                qos = QoSProfile(depth=10)
+                # message_filters Subscriber requires node and qos_profile kwarg in ROS2 wrapper
+                self._mf_flex_sub = Subscriber(self, Float32MultiArray, "/flex_sensor_data", qos_profile=qos)
+                self._mf_pressure_sub = Subscriber(self, Float32, "/vacuum_pressure", qos_profile=qos)
+                self._mf_force_sub = Subscriber(self, WrenchStamped, "/force_torque_sensor_broadcaster/wrench", qos_profile=qos)
+                self._mf_tof_sub = Subscriber(self, Int32, "/tof_sensor_data", qos_profile=qos)
+
+                # tune slop to match sensor skew; 0.05 (50 ms) is a good starting point
+                self._rf_sync = ApproximateTimeSynchronizer(
+                    [self._mf_flex_sub, self._mf_pressure_sub, self._mf_force_sub, self._mf_tof_sub],
+                    queue_size=10,
+                    slop=0.05,
+                    allow_headerless=True
+                )
+                self._rf_sync.registerCallback(self.rf_sync_cb)
+                self.get_logger().info("RF ApproximateTimeSynchronizer registered (slop=0.05s).")
+            except Exception as e:
+                self.get_logger().warn(f"Could not create RF ApproximateTimeSynchronizer: {e}")
+            self._rf_sync = None
+
+
     # --- SERVICE HANDLERS ---
     # update handle_start to store the timer and avoid creating duplicates
     def handle_start(self, request, response):
@@ -117,8 +200,8 @@ class FlexToFListener(Node):
             self.controller = 'default'
             self.get_logger().info("Controller started.")
 
-            # --- AUTO STOP AFTER 10 SECONDS ---
-            stop_time = 10.0  # seconds
+            # --- AUTO STOP AFTER 20 SECONDS ---
+            stop_time = 20.0  # seconds
             self.get_logger().info(f"Controller will auto-stop in {stop_time} seconds")
 
             # If for some reason a leftover timer exists, destroy it first
@@ -199,6 +282,103 @@ class FlexToFListener(Node):
         f = msg.wrench.force
         # scalar magnitude
         self.latest_force = (f.x**2 + f.y**2 + f.z**2)**0.5
+
+
+
+    def rf_sync_cb(self, flex_msg, pressure_msg, force_msg, tof_msg):
+        """
+        Called when flex, pressure, force, tof messages are approximately time-aligned.
+        Builds the same sliding-window flattened feature vector used at training time.
+        Stores the last valid built window in self._last_built_X for _rf_features() to return.
+        """
+        # 1) compute force magnitude and 21-sample filtered force (training used filter_force(...,21))
+        try:
+            f = force_msg.wrench.force
+            force_mag = float((f.x**2 + f.y**2 + f.z**2)**0.5)
+        except Exception as e:
+            self.get_logger().debug(f"rf_sync_cb: bad force_msg: {e}")
+            return
+
+        # maintain 21-sample buffer and compute simple mean as proxy for filter_force(...,21)
+        self._force_raw_buffer.append(force_mag)
+        filtered_force = float(np.mean(list(self._force_raw_buffer)))
+
+        # 2) flex norm (training used a single flex_norm per timestep)
+        try:
+            flex_arr = np.asarray(flex_msg.data, dtype=float) / 4.0
+            flex_norm = float(np.linalg.norm(flex_arr))
+        except Exception:
+            # fallback: try ravel
+            try:
+                flex_norm = float(np.linalg.norm(np.ravel(np.array(flex_msg.data, dtype=float))))
+            except Exception as e:
+                self.get_logger().debug(f"rf_sync_cb: cannot parse flex_msg: {e}")
+                return
+
+        # 3) pressure and tof scalars
+        try:
+            pressure = float(pressure_msg.data)
+        except Exception:
+            pressure = float(getattr(pressure_msg, "data", 0.0))
+
+        try:
+            tof = float(tof_msg.data)
+        except Exception:
+            tof = float(getattr(tof_msg, "data", 0.0))
+
+        # 4) append to sliding windows (order must match training bundle)
+        # ensure keys exist (defensive)
+        for k in self.rf_feature_order:
+            if k not in self._rf_hist:
+                self._rf_hist[k] = deque(maxlen=self.rf_window_size)
+
+        self._rf_hist["Flex"].append(flex_norm)
+        self._rf_hist["Pressure"].append(pressure)
+        self._rf_hist["Force"].append(filtered_force)
+        self._rf_hist["TOF"].append(tof)
+
+        # 5) if we have enough samples, build flattened window oldest->newest per sensor
+        W = int(self.rf_window_size)
+        if all(len(self._rf_hist[k]) >= W for k in self.rf_feature_order):
+            feat_list = []
+            for k in self.rf_feature_order:
+                hist = list(self._rf_hist[k])
+                # use most recent W samples in order oldest -> newest
+                feat_list.extend(hist[-W:])
+            X = np.array(feat_list, dtype=float).reshape(1, -1)
+
+            # optional scaler
+            if self.rf_scaler is not None and hasattr(self.rf_scaler, "transform"):
+                try:
+                    X = self.rf_scaler.transform(X)
+                except Exception as e:
+                    self.get_logger().warn(f"rf_sync_cb: scaler.transform failed: {e}")
+                    X = None
+
+            # sanity-check vs model
+            if X is not None and hasattr(self.rf_model, "n_features_in_"):
+                if X.shape[1] != self.rf_model.n_features_in_:
+                    self.get_logger().warn(
+                        f"rf_sync_cb: built {X.shape[1]} features but model expects {self.rf_model.n_features_in_}"
+                    )
+                    X = None
+
+            # store for control loop to consume
+            self._last_built_X = X
+        else:
+            # not enough history yet
+            self._last_built_X = None
+
+    def _rf_features(self):
+        """
+        Return the most recent aligned window built by rf_sync_cb (or None).
+        This preserves your control_loop usage: call _rf_features() and get (1, N) array or None.
+        """
+        if not getattr(self, "rf_model_loaded", False):
+            return None
+        return getattr(self, "_last_built_X", None)
+
+
 
     def control_loop(self):
         # --- EARLY EXIT WHEN STOPPED ---
@@ -297,6 +477,9 @@ class FlexToFListener(Node):
                     if pressure <= PRESSURE_THRESHOLD:
                         self.get_logger().info(f'Grasp vacuum succeeded (pressure={pressure})')
                         self.state = 'release' # move on to the picking motion
+                        if RF_CONTROLLER and self.rf_model_loaded:
+                            for key in self._rf_hist:
+                                self._rf_hist[key].clear()
                         self.release_start_time = now
                     elif elapsed > PRESSURE_CONTROLLER_TIMEOUT:
                         self.get_logger().warn(f'Grasp failed: timeout (pressure={pressure})')
@@ -306,10 +489,36 @@ class FlexToFListener(Node):
                 elif elapsed > PRESSURE_CONTROLLER_TIMEOUT:
                     self.get_logger().warn(f'Grasp completed: timeout (pressure={pressure})')
                     self.state = 'release' # move on to the picking motion
+                    if RF_CONTROLLER and self.rf_model_loaded:
+                        for key in self._rf_hist:
+                            self._rf_hist[key].clear()
                     self.release_start_time = now
             elif self.state == 'release':
                 elapsed_release = now - self.release_start_time
                 self.get_logger().info(f"RELEASE elapsed={elapsed_release:.2f}")
+
+                if RF_CONTROLLER and self.rf_model_loaded:
+                    self.get_logger().info("RF CONTROLLER STUFF IS HAPPENING NOW")
+                    if now - self.last_rf_time > self.rf_period:
+                        self.last_rf_time = now
+
+                        features = self._rf_features()
+                        if features is not None:
+                            assert features.shape[1] == self.rf_model.n_features_in_
+
+                            label = int(self.rf_model.predict(features)[0])
+                            self.get_logger().info(f"RF predicted label={label}")
+
+                            if label == 1:
+                                self.get_logger().info("RF SUCCESS → done")
+                                self.state = "done"
+                                return
+
+                            elif label in (2, 3):
+                                self.get_logger().warn("RF FAILURE → abort")
+                                self.pump.vacuum_off()
+                                self.state = "failed"
+                                return
 
                 # Pulling back (picking motion)
                 if elapsed_release < PICKING_TIME:
